@@ -11,15 +11,15 @@
 #define motor_dir_pin 12
 #define motor_step_pin 11
 
-#define max_velocity 160000
+#define max_velocity 1600
 
-float motor_acceleration = 1600.0;
+float motor_acceleration = 1600000.0;
 
-float homing_velocity = 1600.0;
+float homing_velocity = 800.0;
 float cruise_velocity = 1600.0;
 
-uint32_t min_position = 0;
-uint32_t max_position;
+int32_t min_position = 0;
+int32_t max_position;
 
 
 bool continuous_knit = false;
@@ -48,7 +48,6 @@ void setup() {
   carriage_motor->setEnablePin(motor_en_pin);
   carriage_motor->enableOutputs();
   carriage_motor->setAcceleration(motor_acceleration);
-  carriage_motor->setSpeed(homing_velocity);
   carriage_motor->setMaxSpeed(max_velocity);
 
   while(digitalRead(footswitch_pin) != LOW) {};
@@ -57,14 +56,28 @@ void setup() {
   home_carriage(direction_t::right);
 
   carriage_motor->setSpeed(cruise_velocity);
+  Serial.begin(9600);
 }
+y
+unsigned long lastDebounce = 0;  // the last time the output pin was toggled
+unsigned long debounceDelay = 50;    // the debounce time; increase if the output flickers
+int lastButtonState = HIGH;
 
 void loop() {
-  if(digitalRead(footswitch_pin) == LOW)
+    // read the state of the switch into a local variable:
+  int reading = digitalRead(footswitch_pin);
+  // If the switch changed, due to noise or pressing:
+  if (reading != lastButtonState) {
+    // reset the debouncing timer
+    while(digitalRead(footswitch_pin)==LOW);
     continuous_knit = !continuous_knit;
+    Serial.write("ping!");
+  }
 
   if(continuous_knit)
     knit_row(next_direction);
+  else
+    carriage_motor->stop();
 }
 
 void home_carriage(direction_t direction)
@@ -74,6 +87,8 @@ void home_carriage(direction_t direction)
     return;
 
   uint8_t limit_pin = direction == direction_t::left ? limit_min_pin : limit_max_pin;
+
+  carriage_motor->setSpeed(homing_velocity);
 
   if(digitalRead(limit_pin) == HIGH)
   {
@@ -85,10 +100,10 @@ void home_carriage(direction_t direction)
 
     // get to the limit
     while(digitalRead(limit_pin) != LOW)
-      carriage_motor->run();
-    carriage_motor->setAcceleration(1000000000.);
+      carriage_motor->runSpeed();
+
     carriage_motor->stop();
-    carriage_motor->runToPosition();
+
     // back off the limit with a small move, 1/10 rev (about 3mm)
     if(direction == direction_t::left)
       carriage_motor->move(160);
@@ -96,7 +111,8 @@ void home_carriage(direction_t direction)
       carriage_motor->move(-160);
 
     // finish the move, clean up and leave
-    while(carriage_motor->run()) {};
+    while(carriage_motor->runSpeed()) {};
+    carriage_motor->stop();
 
     if(direction == direction_t::left)
       carriage_motor->setCurrentPosition(0);
@@ -109,6 +125,7 @@ void home_carriage(direction_t direction)
 
 void knit_row(direction_t direction)
 {
+
   // move to the limit at the desired direction
   if(direction == direction_t::left)
     carriage_motor->moveTo(min_position);
@@ -116,8 +133,13 @@ void knit_row(direction_t direction)
     carriage_motor->moveTo(max_position);
 
   // don't return until we're done with the move (this would be bad if we wanted to do other things)
-  while(carriage_motor->run()) {};
-
+  while(carriage_motor->distanceToGo()){
+      carriage_motor->runSpeed();
+      if(digitalRead(footswitch_pin) == LOW && continuous_knit){
+        continuous_knit = false;
+        Serial.write("STOP!\n");
+      }
+  }
   // swap the next direction to move.
   flip_direction();
 }
